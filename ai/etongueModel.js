@@ -2,7 +2,6 @@ const tf = require("@tensorflow/tfjs");
 const xlsx = require("xlsx");
 const path = require("path");
 
-
 let model = null;
 
 // 🔥 Label mapping
@@ -13,20 +12,14 @@ function loadExcel(filePath) {
     const wb = xlsx.readFile(filePath);
     const sheet = wb.Sheets[wb.SheetNames[0]];
 
-    // 🔥 Force full range
-    const range = xlsx.utils.decode_range(sheet['!ref']);
-    range.e.c += 1; // extend one column
-    sheet['!ref'] = xlsx.utils.encode_range(range);
-
-    const data = xlsx.utils.sheet_to_json(sheet, {
-        defval: null
-    });
+    const data = xlsx.utils.sheet_to_json(sheet, { defval: null });
 
     console.log("📊 Total rows from Excel:", data.length);
     console.log("📊 Columns:", Object.keys(data[0]));
 
     const cleaned = data.map(row => {
         const item = {
+            ph: Number(row.pH),   // 🔥 NEW
             tds: Number(row.TDS),
             voc: Number(row.VOC),
             r: Number(row.R),
@@ -35,12 +28,14 @@ function loadExcel(filePath) {
             freq: Number(row.FREQUENCY),
             label: Number(
                 row.LABELNUM ??
-                row["LABELNUM "] ?? row[" LABELNUM"] ??
+                row["LABELNUM "] ??
+                row[" LABELNUM"] ??
                 row.labelnum
             )
         };
 
         if (
+            isNaN(item.ph) ||
             isNaN(item.tds) ||
             isNaN(item.voc) ||
             isNaN(item.r) ||
@@ -66,10 +61,7 @@ async function trainModel() {
     console.log("📊 Loading dataset...");
 
     const filePath = path.join(__dirname, "../ETongueDataset.xlsx");
-
     const data = loadExcel(filePath);
-
-    console.log("📂 Loading from:", filePath);
 
     if (!data || data.length < 20) {
         console.log("❌ Not enough data");
@@ -78,14 +70,15 @@ async function trainModel() {
 
     console.log("✅ Rows:", data.length);
 
-    // 🔥 Normalize
+    // 🔥 Normalize (NOW 7 FEATURES)
     const inputs = data.map(d => [
-        d.tds / 500,
-        d.voc / 100,
+        d.ph / 14,        // 🔥 pH normalization
+        d.tds / 1000,
+        d.voc / 1000,
         d.r / 255,
         d.g / 255,
         d.b / 255,
-        d.freq / 300
+        d.freq / 100
     ]);
 
     // 🔥 One-hot encoding
@@ -98,9 +91,10 @@ async function trainModel() {
     const xs = tf.tensor2d(inputs);
     const ys = tf.tensor2d(labels);
 
-    // 🔥 Model
+    // 🔥 Improved Model
     model = tf.sequential();
-    model.add(tf.layers.dense({ units: 32, inputShape: [6], activation: "relu" }));
+    model.add(tf.layers.dense({ units: 64, inputShape: [7], activation: "relu" }));
+    model.add(tf.layers.dense({ units: 32, activation: "relu" }));
     model.add(tf.layers.dense({ units: 16, activation: "relu" }));
     model.add(tf.layers.dense({ units: 4, activation: "softmax" }));
 
@@ -113,7 +107,7 @@ async function trainModel() {
     console.log("⚡ Training...");
 
     await model.fit(xs, ys, {
-        epochs: 100,
+        epochs: 120,
         batchSize: 16,
         shuffle: true
     });
@@ -122,7 +116,7 @@ async function trainModel() {
 }
 
 // ✅ Predict
-async function predictTaste(tds, voc, r, g, b, freq) {
+async function predictTaste(ph, tds, voc, r, g, b, freq) {
     try {
         if (!model) {
             console.log("⚡ Training model first...");
@@ -130,12 +124,13 @@ async function predictTaste(tds, voc, r, g, b, freq) {
         }
 
         const input = tf.tensor2d([[
-            tds / 500,
-            voc / 100,
+            ph / 14,
+            tds / 1000,
+            voc / 1000,
             r / 255,
             g / 255,
             b / 255,
-            freq / 300
+            freq / 100
         ]]);
 
         const output = model.predict(input);
